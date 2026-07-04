@@ -1997,7 +1997,7 @@
                       </span>
                       {% if version_info.commit_hash %}
                       <a
-                        href="https://github.com/g0ldyy/comet/commit/{{ version_info.commit_hash }}"
+                        href="https://github.com/master3395/comet/commit/{{ version_info.commit_hash }}"
                         target="_blank"
                         style="
                           background: linear-gradient(135deg, #8b5cf6, #7c3aed);
@@ -2093,6 +2093,68 @@
                         <sl-spinner></sl-spinner> Checking for updates...
                       </div>
                     </div>
+
+                    <sl-divider></sl-divider>
+
+                    <div class="metric-section" id="system-updater-root">
+                      <h3>
+                        <sl-icon name="cloud-download"></sl-icon> Deployment Management
+                      </h3>
+                      <p style="color: var(--sl-color-neutral-400); font-size: 0.9rem; margin: 0 0 12px 0;">
+                        Backup, upgrade, or restore Comet using Docker tags. A backup is created automatically before each update.
+                      </p>
+
+                      <div id="system-updater-notice" hidden style="margin-bottom: 12px;"></div>
+
+                      <div id="system-updater-deploy" style="display: flex; flex-direction: column; gap: 8px; margin-bottom: 16px;">
+                        <div style="display: flex; justify-content: space-between; align-items: center; padding: 10px 12px; background: rgba(59, 130, 246, 0.1); border: 1px solid rgba(59, 130, 246, 0.25); border-radius: 8px;">
+                          <span style="color: #93c5fd;">Running tag</span>
+                          <code id="system-updater-current-tag">-</code>
+                        </div>
+                        <div style="display: flex; justify-content: space-between; align-items: center; padding: 10px 12px; background: rgba(59, 130, 246, 0.08); border: 1px solid rgba(59, 130, 246, 0.2); border-radius: 8px;">
+                          <span style="color: #93c5fd;">Image</span>
+                          <code id="system-updater-current-image" style="font-size: 0.75rem;">-</code>
+                        </div>
+                      </div>
+
+                      <div id="system-updater-job-banner" hidden style="margin-bottom: 12px;"></div>
+
+                      <div id="system-updater-progress" hidden style="margin-bottom: 16px;">
+                        <div style="display: flex; justify-content: space-between; margin-bottom: 6px; font-size: 0.85rem;">
+                          <span id="system-updater-progress-label">Working...</span>
+                          <span id="system-updater-progress-pct">0%</span>
+                        </div>
+                        <div style="height: 8px; background: rgba(255,255,255,0.08); border-radius: 4px; overflow: hidden;">
+                          <div id="system-updater-progress-fill" style="height: 100%; width: 0%; background: linear-gradient(90deg, #3b82f6, #2563eb); transition: width 0.3s ease;"></div>
+                        </div>
+                      </div>
+
+                      <div style="display: flex; flex-wrap: wrap; gap: 10px; align-items: end; margin-bottom: 16px;">
+                        <sl-select id="system-updater-tag" label="Image tag" size="small" style="min-width: 180px; flex: 1;">
+                          <sl-option value="main">main</sl-option>
+                          <sl-option value="latest">latest</sl-option>
+                        </sl-select>
+                        <sl-button id="system-updater-btn-update" variant="primary" size="small">
+                          <sl-icon slot="prefix" name="arrow-up-circle"></sl-icon>
+                          Update now
+                        </sl-button>
+                        <sl-button id="system-updater-btn-refresh" variant="default" size="small" outline>
+                          <sl-icon slot="prefix" name="arrow-clockwise"></sl-icon>
+                          Refresh
+                        </sl-button>
+                      </div>
+
+                      <pre id="system-updater-log" hidden style="max-height: 200px; overflow: auto; background: rgba(0,0,0,0.35); padding: 10px; border-radius: 6px; font-size: 0.75rem; margin: 0 0 16px 0;"></pre>
+
+                      <h4 style="margin: 0 0 8px 0; display: flex; align-items: center; gap: 6px;">
+                        <sl-icon name="archive"></sl-icon> Backups
+                      </h4>
+                      <div id="system-updater-backups" style="overflow-x: auto;">
+                        <div style="text-align: center; color: var(--sl-color-neutral-500); padding: 16px;">
+                          <sl-spinner></sl-spinner> Loading backups...
+                        </div>
+                      </div>
+                    </div>
                   </div>
                 </div>
               </div>
@@ -2143,6 +2205,10 @@
       // Peer cache for cross-referencing
       let peersCache = [];
 
+      let systemUpdaterPollTimer = null;
+      let systemUpdaterCsrf = "";
+      let systemUpdaterLockNoticeShown = false;
+
       function initializeDashboard() {
         loadConnections();
         ensureBackgroundScraperNextCycleTicker();
@@ -2183,6 +2249,15 @@
             poolSearchTerm = poolSearch.value.trim().toLowerCase();
             renderPoolsList();
           });
+        }
+
+        const updaterUpdateBtn = document.getElementById("system-updater-btn-update");
+        const updaterRefreshBtn = document.getElementById("system-updater-btn-refresh");
+        if (updaterUpdateBtn) {
+          updaterUpdateBtn.addEventListener("click", systemUpdaterStartUpdate);
+        }
+        if (updaterRefreshBtn) {
+          updaterRefreshBtn.addEventListener("click", loadSystemUpdater);
         }
       }
 
@@ -2327,6 +2402,10 @@
         const activePanel = e.detail.name;
         currentTab = activePanel;
 
+        if (activePanel !== "system") {
+          systemUpdaterStopPolling();
+        }
+
         setupAutoRefreshForTab(activePanel);
 
         switch (activePanel) {
@@ -2347,7 +2426,320 @@
             break;
           case "system":
             checkUpdateStatus();
+            loadSystemUpdater();
             break;
+        }
+      }
+
+      function systemUpdaterStopPolling() {
+        if (systemUpdaterPollTimer) {
+          clearInterval(systemUpdaterPollTimer);
+          systemUpdaterPollTimer = null;
+        }
+      }
+
+      function systemUpdaterStartPolling() {
+        if (systemUpdaterPollTimer) {
+          return;
+        }
+        systemUpdaterPollTimer = setInterval(systemUpdaterPollStatus, 3000);
+        systemUpdaterPollStatus();
+      }
+
+      function systemUpdaterShowNotice(message, variant) {
+        const box = document.getElementById("system-updater-notice");
+        if (!box) {
+          return;
+        }
+        const colors = {
+          success: "var(--sl-color-success-500)",
+          warning: "var(--sl-color-warning-500)",
+          danger: "var(--sl-color-danger-500)",
+          info: "var(--sl-color-primary-500)",
+        };
+        box.hidden = false;
+        box.style.padding = "10px 12px";
+        box.style.borderRadius = "6px";
+        box.style.fontSize = "0.9rem";
+        box.style.color = colors[variant] || colors.info;
+        box.style.background = "rgba(255,255,255,0.05)";
+        box.style.border = "1px solid rgba(255,255,255,0.1)";
+        box.textContent = message;
+      }
+
+      function systemUpdaterClearNotice() {
+        const box = document.getElementById("system-updater-notice");
+        if (!box) {
+          return;
+        }
+        box.hidden = true;
+        box.textContent = "";
+      }
+
+      function systemUpdaterUpdateProgress(job) {
+        const wrap = document.getElementById("system-updater-progress");
+        const label = document.getElementById("system-updater-progress-label");
+        const pctEl = document.getElementById("system-updater-progress-pct");
+        const fill = document.getElementById("system-updater-progress-fill");
+        if (!wrap || !label || !pctEl || !fill) {
+          return;
+        }
+        if (!job) {
+          wrap.hidden = true;
+          return;
+        }
+        let pct = typeof job.progress_percent === "number" ? job.progress_percent : null;
+        let labelText = job.progress_label || job.message || "Working";
+        const status = job.status || "";
+        if (status === "completed") {
+          pct = 100;
+          labelText = job.message || "Completed";
+        } else if (status === "failed") {
+          pct = pct === null ? 0 : pct;
+          labelText = job.message || "Failed";
+        }
+        if (pct === null && status !== "running" && status !== "queued") {
+          wrap.hidden = true;
+          return;
+        }
+        wrap.hidden = false;
+        label.textContent = labelText;
+        if (pct === null) {
+          pctEl.textContent = "...";
+          fill.style.width = "30%";
+          return;
+        }
+        pct = Math.max(0, Math.min(status === "completed" ? 100 : 99, pct));
+        fill.style.width = pct + "%";
+        pctEl.textContent = (status === "completed" ? 100 : pct) + "%";
+      }
+
+      function systemUpdaterRenderBackups(backups) {
+        const container = document.getElementById("system-updater-backups");
+        if (!container) {
+          return;
+        }
+        if (!Array.isArray(backups) || backups.length === 0) {
+          container.innerHTML = '<div style="color: var(--sl-color-neutral-500); font-size: 0.9rem;">No backups yet. Run an update to create one automatically.</div>';
+          return;
+        }
+        let rows = backups.map((backup) => {
+          const id = backup.id || "";
+          const created = backup.created_at || "-";
+          const tag = backup.tag || "-";
+          return `<tr>
+            <td style="padding: 8px;"><code style="font-size: 0.75rem;">${id}</code></td>
+            <td style="padding: 8px;">${created}</td>
+            <td style="padding: 8px;">${tag}</td>
+            <td style="padding: 8px;">
+              <sl-button size="small" variant="warning" outline class="system-updater-restore-btn" data-backup-id="${id}">Restore</sl-button>
+            </td>
+          </tr>`;
+        }).join("");
+        container.innerHTML = `<table style="width: 100%; border-collapse: collapse; font-size: 0.85rem;">
+          <thead><tr style="text-align: left; color: var(--sl-color-neutral-400);">
+            <th style="padding: 8px;">ID</th><th style="padding: 8px;">Created</th><th style="padding: 8px;">Tag</th><th style="padding: 8px;">Action</th>
+          </tr></thead><tbody>${rows}</tbody></table>`;
+        container.querySelectorAll(".system-updater-restore-btn").forEach((btn) => {
+          btn.addEventListener("click", () => {
+            const backupId = btn.getAttribute("data-backup-id");
+            if (backupId) {
+              systemUpdaterStartRestore(backupId, btn);
+            }
+          });
+        });
+      }
+
+      function systemUpdaterRenderTagOptions(tags, recommended) {
+        const select = document.getElementById("system-updater-tag");
+        if (!select || !Array.isArray(tags)) {
+          return;
+        }
+        select.innerHTML = "";
+        tags.forEach((tag) => {
+          const option = document.createElement("sl-option");
+          option.value = tag;
+          option.textContent = tag;
+          if (tag === recommended) {
+            option.selected = true;
+          }
+          select.appendChild(option);
+        });
+      }
+
+      async function systemUpdaterApi(path, options) {
+        options = options || {};
+        const headers = options.headers || {};
+        if (options.body) {
+          headers["Content-Type"] = "application/json";
+        }
+        const response = await fetch("/operator/api/" + path, {
+          method: options.method || "GET",
+          headers: headers,
+          body: options.body || null,
+          credentials: "same-origin",
+        });
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok) {
+          const err = new Error(data.error || "Request failed");
+          err.status = response.status;
+          throw err;
+        }
+        return data;
+      }
+
+      async function loadSystemUpdater() {
+        try {
+          const data = await systemUpdaterApi("status");
+          systemUpdaterCsrf = data.csrf || systemUpdaterCsrf;
+          const currentTag = document.getElementById("system-updater-current-tag");
+          const currentImage = document.getElementById("system-updater-current-image");
+          if (currentTag) {
+            currentTag.textContent = (data.current && data.current.tag) || "-";
+          }
+          if (currentImage) {
+            currentImage.textContent = (data.current && data.current.image) || "-";
+          }
+          systemUpdaterRenderTagOptions(data.available_tags || ["main", "latest"], data.recommended_tag || "main");
+          systemUpdaterRenderBackups(data.backups || []);
+          if (data.lock_stale_cleared) {
+            systemUpdaterShowNotice("Cleared a stale update lock from an earlier run.", "warning");
+          } else if (data.lock_active && !systemUpdaterLockNoticeShown) {
+            systemUpdaterShowNotice("Update or restore in progress.", "info");
+            systemUpdaterLockNoticeShown = true;
+          }
+          if (data.job) {
+            systemUpdaterRenderJob(data.job);
+            if (data.job.status === "running" || data.job.status === "queued") {
+              systemUpdaterStartPolling();
+            }
+          } else {
+            systemUpdaterUpdateProgress(null);
+          }
+          if (data.job_log_tail && !data.job) {
+            const logBox = document.getElementById("system-updater-log");
+            if (logBox) {
+              logBox.hidden = false;
+              logBox.textContent = data.job_log_tail;
+            }
+          }
+        } catch (err) {
+          systemUpdaterShowNotice(err.message || "Could not load deployment status.", "danger");
+        }
+      }
+
+      function systemUpdaterRenderJob(job) {
+        const banner = document.getElementById("system-updater-job-banner");
+        const logBox = document.getElementById("system-updater-log");
+        const updateBtn = document.getElementById("system-updater-btn-update");
+        if (banner && job) {
+          banner.hidden = false;
+          const color = job.status === "completed" ? "var(--sl-color-success-500)" : job.status === "failed" ? "var(--sl-color-danger-500)" : "var(--sl-color-primary-500)";
+          banner.style.padding = "10px 12px";
+          banner.style.borderRadius = "6px";
+          banner.style.fontSize = "0.9rem";
+          banner.style.color = color;
+          banner.style.background = "rgba(255,255,255,0.05)";
+          banner.innerHTML = `<strong>Job:</strong> ${job.status || "unknown"} - ${job.message || ""}`;
+        }
+        systemUpdaterUpdateProgress(job);
+        if (logBox && job.job_log_tail) {
+          logBox.hidden = false;
+          logBox.textContent = job.job_log_tail;
+        }
+        if (job && (job.status === "completed" || job.status === "failed")) {
+          systemUpdaterStopPolling();
+          systemUpdaterLockNoticeShown = false;
+          if (updateBtn) {
+            updateBtn.disabled = false;
+          }
+          document.querySelectorAll(".system-updater-restore-btn").forEach((b) => {
+            b.disabled = false;
+          });
+          if (job.status === "completed") {
+            systemUpdaterShowNotice(job.message || "Job completed successfully.", "success");
+          } else if (job.status === "failed") {
+            systemUpdaterShowNotice(job.message || "Job failed. Check the log below.", "danger");
+          }
+        } else if (job && (job.status === "running" || job.status === "queued")) {
+          if (updateBtn) {
+            updateBtn.disabled = true;
+          }
+        }
+      }
+
+      async function systemUpdaterPollStatus() {
+        try {
+          const data = await systemUpdaterApi("status");
+          systemUpdaterCsrf = data.csrf || systemUpdaterCsrf;
+          if (data.job) {
+            systemUpdaterRenderJob(data.job);
+          } else {
+            systemUpdaterUpdateProgress(null);
+          }
+        } catch (err) {
+          systemUpdaterShowNotice(err.message || "Could not refresh status.", "danger");
+        }
+      }
+
+      async function systemUpdaterStartUpdate() {
+        const tagSelect = document.getElementById("system-updater-tag");
+        const updateBtn = document.getElementById("system-updater-btn-update");
+        if (!tagSelect || !systemUpdaterCsrf) {
+          return;
+        }
+        const tag = tagSelect.value || "main";
+        if (!confirm('Create a backup and update Comet to tag "' + tag + '"?')) {
+          return;
+        }
+        systemUpdaterClearNotice();
+        systemUpdaterLockNoticeShown = false;
+        if (updateBtn) {
+          updateBtn.disabled = true;
+        }
+        systemUpdaterUpdateProgress({ status: "queued", progress_percent: 2, progress_label: "Starting update..." });
+        try {
+          const data = await systemUpdaterApi("action", {
+            method: "POST",
+            body: JSON.stringify({ action: "update", tag: tag, csrf: systemUpdaterCsrf }),
+          });
+          systemUpdaterShowNotice(data.message || "Update started.", "success");
+          systemUpdaterStartPolling();
+        } catch (err) {
+          if (updateBtn) {
+            updateBtn.disabled = false;
+          }
+          systemUpdaterUpdateProgress(null);
+          systemUpdaterShowNotice(err.message || "Update failed to start.", "danger");
+        }
+      }
+
+      async function systemUpdaterStartRestore(backupId, button) {
+        if (!systemUpdaterCsrf) {
+          return;
+        }
+        if (!confirm('Restore Comet from backup "' + backupId + '"?')) {
+          return;
+        }
+        systemUpdaterClearNotice();
+        systemUpdaterLockNoticeShown = false;
+        if (button) {
+          button.disabled = true;
+        }
+        systemUpdaterUpdateProgress({ status: "queued", progress_percent: 2, progress_label: "Starting restore..." });
+        try {
+          const data = await systemUpdaterApi("action", {
+            method: "POST",
+            body: JSON.stringify({ action: "restore", backup_id: backupId, csrf: systemUpdaterCsrf }),
+          });
+          systemUpdaterShowNotice(data.message || "Restore started.", "success");
+          systemUpdaterStartPolling();
+        } catch (err) {
+          if (button) {
+            button.disabled = false;
+          }
+          systemUpdaterUpdateProgress(null);
+          systemUpdaterShowNotice(err.message || "Restore failed to start.", "danger");
         }
       }
 
