@@ -63,7 +63,7 @@ The Discord `/operator/` panel remains available as a fallback.
 
 ## GitHub repo for update checks
 
-Set `COMET_GITHUB_REPO=master3395/comet` (default in this fork) so the System tab "Update available" check compares against your fork. Use `g0ldyy/comet` for upstream tracking if preferred.
+The System tab **Update available** check uses [g0ldyy/comet](https://github.com/g0ldyy/comet) by default. Override with `COMET_GITHUB_REPO` if you track a different fork.
 
 ## Related docs
 

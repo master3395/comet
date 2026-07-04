@@ -8,7 +8,7 @@ import aiohttp
 from loguru import logger
 
 GITHUB_API_TIMEOUT = 10
-GITHUB_REPO = os.getenv("COMET_GITHUB_REPO", "master3395/comet")
+GITHUB_REPO = os.getenv("COMET_GITHUB_REPO", "g0ldyy/comet")
 
 
 @dataclass
